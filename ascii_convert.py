@@ -305,12 +305,6 @@ def list_chafa_symbol_sets():
 
 def main():
     """Main function for the ASCII art converter."""
-    # Show banner
-    print("""
-    ╔════════════════════════════════════════════╗
-    ║          ASCII ART VIDEO CONVERTER         ║
-    ╚════════════════════════════════════════════╝
-    """)
     
     # Detect terminal capabilities
     term_width, term_height, color_support = detect_terminal_capabilities()
