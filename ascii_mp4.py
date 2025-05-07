@@ -215,7 +215,7 @@ def extract_frames(
     """Extract frames from a video."""
     scale_filter = ""
     if width and height:
-        scale_filter = f",scale={width}:{height}:force_original_aspect_ratio=decrease"
+        scale_filter = f",scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos"
     
     cmd = [
         "ffmpeg", "-i", str(video_path),
@@ -545,9 +545,11 @@ def main():
     
     # Dimension arguments
     parser.add_argument("--width", type=int, default=term_width, 
-                      help="ASCII output width")
+                      help="ASCII output width (for videos, defaults to original width if not specified)")
     parser.add_argument("--height", type=int, default=term_height-2, 
-                      help="ASCII output height")
+                      help="ASCII output height (for videos, defaults to original height if not specified)")
+    parser.add_argument("--scale-factor", type=float, default=4.0,
+                      help="Scale down video dimensions by this factor (e.g., 4.0 = 1/4 of original size)")
     parser.add_argument("--maintain-aspect", action="store_true", default=True,
                       help="Maintain aspect ratio of the original image")
     
@@ -726,9 +728,18 @@ def main():
                 
                 # If width or height is not manually specified, use the original dimensions
                 if args.width == term_width:
-                    args.width = original_width /4
+                    args.width = int(original_width / args.scale_factor)
                 if args.height == term_height-2:
-                    args.height = original_height /4
+                    args.height = int(original_height / args.scale_factor)
+                
+                print(f"Original dimensions: {original_width}x{original_height}")
+                if args.scale_factor != 1.0:
+                    print(f"Scaling down by factor of {args.scale_factor:.1f} to {args.width}x{args.height}")
+                
+                # Warn if dimensions are very large for terminal display
+                if args.width > term_width * 3 or args.height > term_height * 3:
+                    print(f"Warning: Using large dimensions ({args.width}x{args.height}) which may not fit in terminal.")
+                    print(f"For terminal display only, consider specifying smaller dimensions with --width and --height.")
                 
                 # If saving video, calculate appropriate font size for 1:1 pixel mapping
                 if args.save_video and (args.font_size == 14 or args.full_resolution):  # 14 is the default
