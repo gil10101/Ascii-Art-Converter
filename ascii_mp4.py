@@ -31,6 +31,7 @@ ASCII_SETS = {
     "simple": "#@%=+*:-. ",
     "blocks": "█▓▒░ ",
     "numbers": "9876543210 ",
+    "braille": "⠿⠯⠟⠻⠽⠾⠷⠮⠭⠝⠞⠵⠹⠪⠫⠺⠼⠧⠏⠉⠙⠋⠓⠕⠗⠛⠒⠜⠄⠨⠔⠢⠖⠦⠇⠸⠰⠡⠃⠊⠂⠑⠱⠆⠀",
 }
 
 # Define Chafa symbol sets with descriptions (for reference)
@@ -175,19 +176,30 @@ def convert_with_chafa(
     if not color and "--colors=" not in chafa_args and "--fg-only" not in chafa_args:
         cmd.extend(["--colors=none", "--fg-only"])
     
+    # Check if braille symbols are requested
+    using_braille = "braille" in chafa_args
+    
     # Add user args if provided (these will override our defaults)
     if chafa_args:
-        cmd.extend(chafa_args.strip().split())
+        # Split by spaces, but preserve quoted arguments
+        import shlex
+        cmd.extend(shlex.split(chafa_args))
     
     # Add size if not specified in chafa_args
     if not any(arg.startswith("--size=") for arg in cmd):
         cmd.append(f"--size={width}x{height}")
+    
+    # Ensure braille symbols are correctly used if requested
+    if using_braille and not any(arg.startswith("--symbols=") or arg == "--symbols" for arg in cmd):
+        cmd.append("--symbols=braille")
     
     # Add image path
     cmd.append(str(image_path))
     
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True, check=False)
+        if using_braille:
+            print("Using braille symbols for Chafa output")
         return result.stdout
     except Exception as e:
         print(f"Error running chafa: {e}")
@@ -317,28 +329,65 @@ def ascii_frame_to_image(
 ) -> Image.Image:
     """
     Convert ASCII text frame to an image.
-    This handles both plain ASCII and ANSI color-coded ASCII.
+    This handles both plain ASCII and ANSI color-coded ASCII, including Unicode braille characters.
     """
     # Strip ANSI escape codes to get plain text for measuring
     plain_text = ansi_to_plain_text(ascii_text)
     lines = plain_text.split('\n')
     
-    # Try to load a monospace font
-    try:
-        font = ImageFont.truetype("DejaVuSansMono.ttf", font_size)
-    except IOError:
-        # Fallback to default
+    # Find a font that supports braille characters
+    font = None
+    fonts_to_try = [
+        "fonts/unifont_jp-16.0.03.otf",
+        "fonts/BrailleCc0-DOeDd.ttf",  # Prioritize braille font
+        "DejaVuSansMono.ttf",
+        "FreeMono.ttf", 
+        "NotoSansMono-Regular.ttf",
+        "UbuntuMono-Regular.ttf",
+        "LiberationMono-Regular.ttf",
+        # Add system fonts paths
+        "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeMono.ttf",
+        "/System/Library/Fonts/Monaco.ttf",  # macOS
+        "C:\\Windows\\Fonts\\consola.ttf",   # Windows
+    ]
+    
+    for font_name in fonts_to_try:
+        try:
+            font = ImageFont.truetype(font_name, font_size)
+            # Test if this font supports braille
+            if "⠿" in plain_text:
+                # If we found braille in the text, make sure our font can render it
+                test_img = Image.new('RGB', (30, 30), (0, 0, 0))
+                test_draw = ImageDraw.Draw(test_img)
+                test_draw.text((5, 5), "⠿", fill=(255, 255, 255), font=font)
+                # Additional check could be added here if needed
+            break
+        except (IOError, OSError):
+            continue
+    
+    if font is None:
+        # Fallback to default if no suitable font found
         font = ImageFont.load_default()
         font_size = 10  # Default font is usually smaller
+        print("Warning: Could not load a font with braille support. Output quality may be reduced.")
     
-    # Measure a single character for proper spacing
-    char_width = font_size // 2  # Approximate for monospace
-    char_height = font_size
+    # Get text dimensions
+    max_line_length = max(len(ansi_to_plain_text(line)) for line in ascii_text.split('\n'))
+    
+    # Calculate character dimensions to match desired output size
+    # For braille and other special characters, we need precise character sizing
+    char_width = int(font_size * 0.4)  # Reduced from 0.6 to 0.4
+    char_height = int(font_size * 0.8)  # Reduced from 1.2 to 0.8
     
     # Calculate image dimensions
-    max_line_length = max(len(line) for line in lines)
     img_width = max_line_length * char_width
     img_height = len(lines) * char_height
+    
+    # Ensure dimensions are even numbers for video encoding
+    img_width = (img_width + 1) & ~1  # Round up to next even number
+    img_height = (img_height + 1) & ~1  # Round up to next even number
     
     # Create image with background color
     image = Image.new('RGB', (img_width, img_height), bg_color)
@@ -370,8 +419,17 @@ def ascii_frame_to_image(
             else:
                 # Draw text segment with current color
                 if segment:
+                    # Use textlength for proper character width measurement
+                    # This is especially important for special Unicode characters
                     draw.text((x_pos, y_pos), segment, fill=current_color, font=font)
-                    x_pos += len(segment) * char_width
+                    # Get the actual rendered width
+                    try:
+                        # For newer Pillow versions
+                        text_width = draw.textlength(segment, font=font)
+                    except AttributeError:
+                        # Fallback for older Pillow versions
+                        text_width = font.getsize(segment)[0]
+                    x_pos += text_width
         
         y_pos += char_height
     
@@ -406,6 +464,11 @@ def save_video_from_ascii_frames(
         return False
         
     try:
+        # Check if we have braille characters in our ASCII frames
+        has_braille = any("⠀" in frame or "⠁" in frame or "⠿" in frame for frame in ascii_frames)
+        if has_braille and font_size < 20:
+            print("Warning: Font size may be too small for braille characters. Consider using --font-size 20 or higher for better readability.")
+        
         with tempfile.TemporaryDirectory() as tmp_dir:
             temp_dir_path = Path(tmp_dir)
             
@@ -448,6 +511,21 @@ def save_video_from_ascii_frames(
         print(f"Error saving video: {str(e)}")
         return False
 
+def calculate_font_size_for_dimensions(width, height, ascii_width, ascii_height):
+    """Calculate appropriate font size to achieve desired output dimensions."""
+    # Estimate how many characters we need for the given width and height
+    # Each character takes about 0.4*font_size pixels wide and 0.8*font_size pixels high
+    # So: width = ascii_width * 0.4 * font_size, height = ascii_height * 0.8 * font_size
+    
+    font_size_for_width = width / (ascii_width * 0.4)
+    font_size_for_height = height / (ascii_height * 0.8)
+    
+    # Use the smaller of the two to ensure it fits
+    font_size = min(font_size_for_width, font_size_for_height)
+    
+    # Round to nearest integer
+    return max(4, round(font_size))  # Ensure minimum font size of 4
+
 def main():
     """Main function for the ASCII art converter."""
     
@@ -482,6 +560,8 @@ def main():
     parser.add_argument("--save-video", help="Save ASCII video to file (requires FFmpeg)")
     parser.add_argument("--font-size", type=int, default=14,
                       help="Font size for rendered video output")
+    parser.add_argument("--full-resolution", action="store_true", 
+                      help="Force full resolution output matching the original video")
     parser.add_argument("--bg-color", default="0,0,0",
                       help="Background color for video (R,G,B format)")
     parser.add_argument("--video-codec", default="libx264",
@@ -500,6 +580,8 @@ def main():
                       help="Adjust brightness (-100 to 100) (native mode only)")
     parser.add_argument("--contrast", type=float, default=0,
                       help="Adjust contrast (-100 to 100) (native mode only)")
+    parser.add_argument("--braille-set", action="store_true",
+                      help="Add braille characters to ASCII character set (native mode only)")
     
     # Color options
     parser.add_argument("--color", action="store_true", 
@@ -569,10 +651,19 @@ def main():
     if args.color and color_support == ColorSupport.NONE:
         print("Warning: Terminal does not support color. Disabling color output.")
         args.color = False
+        
+    # Add braille characters to ASCII set if requested
+    if args.braille_set and args.ascii_set == "standard":
+        print("Using braille character set for native rendering")
+        args.ascii_set = "braille"
     
     # Check for external tools
     use_chafa = not args.force_native and is_tool_available("chafa")
     has_ffmpeg = is_tool_available("ffmpeg")
+    
+    # If using chafa with braille symbols, ensure the correct arguments are passed
+    if use_chafa and "--symbols" not in args.chafa_args and "braille" in args.chafa_args:
+        args.chafa_args = f"--symbols braille {args.chafa_args}"
     
     # Check if video saving is requested but FFmpeg is not available
     if args.save_video and not has_ffmpeg:
@@ -616,6 +707,39 @@ def main():
             print("Error: FFmpeg is required for video processing but not found.")
             print("Please install FFmpeg: https://ffmpeg.org/download.html")
             return 1
+        
+        # Get original video dimensions
+        try:
+            cmd = ["ffprobe", "-v", "error", "-select_streams", "v:0", 
+                  "-show_entries", "stream=width,height", 
+                  "-of", "default=noprint_wrappers=1", str(filepath)]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            output = result.stdout.strip()
+            
+            # Extract original dimensions
+            width_match = re.search(r'width=(\d+)', output) 
+            height_match = re.search(r'height=(\d+)', output)
+            
+            if width_match and height_match:
+                original_width = int(width_match.group(1))
+                original_height = int(height_match.group(1))
+                
+                # If width or height is not manually specified, use the original dimensions
+                if args.width == term_width:
+                    args.width = original_width /4
+                if args.height == term_height-2:
+                    args.height = original_height /4
+                
+                # If saving video, calculate appropriate font size for 1:1 pixel mapping
+                if args.save_video and (args.font_size == 14 or args.full_resolution):  # 14 is the default
+                    args.font_size = calculate_font_size_for_dimensions(
+                        original_width, original_height, args.width, args.height
+                    )
+                    print(f"Auto-calculated font size: {args.font_size} for 1:1 pixel mapping")
+                
+                print(f"Using dimensions: {args.width}x{args.height}")
+        except Exception as e:
+            print(f"Warning: Could not get original video dimensions: {e}")
         
         print(f"Converting video to ASCII art at {args.framerate} FPS...")
         
