@@ -74,16 +74,26 @@ def resize_image(
 ) -> Image.Image:
     """Resize an image to the specified dimensions."""
     if maintain_aspect:
-        # Calculate height based on aspect ratio
+        # Calculate the exact aspect ratio of the input image
         aspect_ratio = image.height / image.width
-        # Each character in terminal takes about twice as much vertical as horizontal space
-        corrected_aspect = aspect_ratio * 0.5
-        new_height = int(width * corrected_aspect)
         
-        # Make sure height doesn't exceed target
-        if height and new_height > height:
+        # Calculate potential dimensions based on width and height constraints
+        new_width_from_height = int(height / aspect_ratio)
+        new_height_from_width = int(width * aspect_ratio)
+        
+        # Choose dimensions that don't exceed either target
+        if new_height_from_width <= height:
+            # Width is the limiting factor
+            new_width = width
+            new_height = new_height_from_width
+        else:
+            # Height is the limiting factor
+            new_width = new_width_from_height
             new_height = height
-            width = int(new_height / corrected_aspect)
+        
+        # Update width and height with our calculated values
+        width = new_width
+        height = new_height
     
     return image.resize((width, height), Image.LANCZOS).convert("L")
 
@@ -215,7 +225,7 @@ def extract_frames(
     """Extract frames from a video."""
     scale_filter = ""
     if width and height:
-        scale_filter = f",scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos"
+        scale_filter = f",scale={width}:{height}:flags=lanczos"
     
     cmd = [
         "ffmpeg", "-i", str(video_path),
@@ -374,14 +384,15 @@ def ascii_frame_to_image(
         print("Warning: Could not load a font with braille support. Output quality may be reduced.")
     
     # Get text dimensions
-    max_line_length = max(len(ansi_to_plain_text(line)) for line in ascii_text.split('\n'))
+    # Find the max line length but ignore trailing spaces that might be causing the black bar
+    max_line_length = max(len(ansi_to_plain_text(line.rstrip())) for line in ascii_text.split('\n'))
     
     # Calculate character dimensions to match desired output size
-    # For braille and other special characters, we need precise character sizing
-    char_width = int(font_size * 0.4)  # Reduced from 0.6 to 0.4
-    char_height = int(font_size * 0.8)  # Reduced from 1.2 to 0.8
+    # For braille characters, we need a more square aspect ratio
+    char_width = int(font_size * 0.6)  # Increased from 0.4 to 0.6 for more square cells
+    char_height = int(font_size * 0.7)  # Reduced from 0.8 to 0.7 for more square cells
     
-    # Calculate image dimensions
+    # Calculate image dimensions based on actual text content
     img_width = max_line_length * char_width
     img_height = len(lines) * char_height
     
@@ -396,6 +407,8 @@ def ascii_frame_to_image(
     # Parse ANSI colored text and draw with appropriate colors
     y_pos = 0
     for line in ascii_text.split('\n'):
+        # Strip trailing spaces from the line before rendering
+        line = line.rstrip()
         x_pos = 0
         
         # Simple ANSI color parsing - this handles basic color codes
@@ -514,11 +527,11 @@ def save_video_from_ascii_frames(
 def calculate_font_size_for_dimensions(width, height, ascii_width, ascii_height):
     """Calculate appropriate font size to achieve desired output dimensions."""
     # Estimate how many characters we need for the given width and height
-    # Each character takes about 0.4*font_size pixels wide and 0.8*font_size pixels high
-    # So: width = ascii_width * 0.4 * font_size, height = ascii_height * 0.8 * font_size
+    # Each character takes about 0.6*font_size pixels wide and 0.7*font_size pixels high
+    # So: width = ascii_width * 0.6 * font_size, height = ascii_height * 0.7 * font_size
     
-    font_size_for_width = width / (ascii_width * 0.4)
-    font_size_for_height = height / (ascii_height * 0.8)
+    font_size_for_width = width / (ascii_width * 0.6)
+    font_size_for_height = height / (ascii_height * 0.7)
     
     # Use the smaller of the two to ensure it fits
     font_size = min(font_size_for_width, font_size_for_height)
