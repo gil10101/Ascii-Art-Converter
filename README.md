@@ -10,3 +10,4 @@ A versatile command-line tool that converts images and videos into ASCII art. Fe
 - Color output support (when terminal supports it)
 - Video playback with adjustable framerate and loop options
 
+

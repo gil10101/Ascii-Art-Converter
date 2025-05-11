@@ -383,17 +383,34 @@ def ascii_frame_to_image(
         font_size = 10  # Default font is usually smaller
         print("Warning: Could not load a font with braille support. Output quality may be reduced.")
     
-    # Get text dimensions
-    # Find the max line length but ignore trailing spaces that might be causing the black bar
-    max_line_length = max(len(ansi_to_plain_text(line.rstrip())) for line in ascii_text.split('\n'))
+    # Get text dimensions - This is where the empty space issue occurs
+    # Calculate the actual maximum width of text by measuring each line
+    lines_with_content = [line for line in lines if line.strip()]
     
-    # Calculate character dimensions to match desired output size
-    # For braille characters, we need a more square aspect ratio
-    char_width = int(font_size * 0.6)  # Increased from 0.4 to 0.6 for more square cells
-    char_height = int(font_size * 0.7)  # Reduced from 0.8 to 0.7 for more square cells
+    if not lines_with_content:
+        # Handle empty frame case
+        return Image.new('RGB', (10, 10), bg_color)
+    
+    # Create a temporary drawing context to measure text
+    temp_img = Image.new('RGB', (1, 1), bg_color)
+    temp_draw = ImageDraw.Draw(temp_img)
+    
+    # Measure the maximum width using the font metrics
+    max_width = 0
+    for line in lines_with_content:
+        try:
+            # For newer Pillow versions
+            line_width = temp_draw.textlength(line, font=font)
+        except AttributeError:
+            # Fallback for older Pillow versions
+            line_width = font.getsize(line)[0]
+        max_width = max(max_width, line_width)
+    
+    # Calculate character dimensions for height
+    char_height = int(font_size * 0.7)
     
     # Calculate image dimensions based on actual text content
-    img_width = max_line_length * char_width
+    img_width = int(max_width) + font_size//2  # Add a small margin
     img_height = len(lines) * char_height
     
     # Ensure dimensions are even numbers for video encoding
@@ -407,8 +424,6 @@ def ascii_frame_to_image(
     # Parse ANSI colored text and draw with appropriate colors
     y_pos = 0
     for line in ascii_text.split('\n'):
-        # Strip trailing spaces from the line before rendering
-        line = line.rstrip()
         x_pos = 0
         
         # Simple ANSI color parsing - this handles basic color codes
